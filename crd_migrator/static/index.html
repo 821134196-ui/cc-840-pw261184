@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>CRD 存储版本迁移台 · PointwiseJob</title>
+<style>
+  :root {
+    --bg: #0f141b;
+    --panel: #161d27;
+    --panel-2: #1d2632;
+    --border: #2a3645;
+    --text: #dbe4ef;
+    --muted: #8b9bb0;
+    --accent: #4f9cf9;
+    --green: #3fb96b;
+    --amber: #e0a93b;
+    --red: #e5534b;
+    --purple: #a371f7;
+    --cyan: #39c5cf;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.55 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  header {
+    padding: 16px 22px; border-bottom: 1px solid var(--border);
+    display: flex; flex-wrap: wrap; gap: 14px; align-items: center;
+    background: linear-gradient(180deg, #141c27, #111720);
+  }
+  header h1 { font-size: 17px; margin: 0; font-weight: 650; }
+  header .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 3px 10px; border-radius: 999px; font-size: 12px;
+    border: 1px solid var(--border); background: var(--panel-2);
+  }
+  .badge .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .dot.idle { background: var(--muted); }
+  .dot.in_progress, .dot.rolling_back, .dot.retrying, .dot.migrating { background: var(--amber); animation: pulse 1.1s infinite; }
+  .dot.succeeded, .dot.migrated { background: var(--green); }
+  .dot.failed, .dot.pending { background: var(--red); }
+  .dot.finalized { background: var(--purple); }
+  .dot.rolled_back { background: var(--cyan); }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+  .spacer { flex: 1; }
+
+  .layout { display: grid; grid-template-columns: 330px 1fr 380px; gap: 14px; padding: 14px; }
+  @media (max-width: 1280px) { .layout { grid-template-columns: 1fr; } }
+  .panel {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 12px; padding: 14px; min-width: 0;
+  }
+  .panel h2 {
+    font-size: 13px; text-transform: uppercase; letter-spacing: .06em;
+    color: var(--muted); margin: 0 0 10px;
+  }
+  .btn-row { display: flex; flex-wrap: wrap; gap: 8px; }
+  button {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 8px; padding: 7px 12px; font-size: 13px; cursor: pointer;
+    transition: border-color .15s, background .15s, opacity .15s;
+  }
+  button:hover:not(:disabled) { border-color: var(--accent); background: #223042; }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  button.primary { background: #1c3a5e; border-color: #2b5687; }
+  button.primary:hover:not(:disabled) { background: #234a78; }
+  button.danger { border-color: #6e302c; }
+  button.danger:hover:not(:disabled) { background: #3d201e; }
+  button.warn { border-color: #7a5a23; }
+  button.warn:hover:not(:disabled) { background: #3a2f18; }
+  .field { margin: 10px 0; }
+  .field label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .field input {
+    width: 100%; background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 7px; color: var(--text); padding: 6px 9px; font-size: 13px;
+  }
+  .hint { font-size: 12px; color: var(--muted); margin: 8px 0 0; }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; font-size: 12px; }
+  .kv dt { color: var(--muted); }
+  .kv dd { margin: 0; font-family: var(--mono); }
+
+  .obj-card {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 12px; margin-bottom: 14px; overflow: hidden;
+  }
+  .obj-head {
+    display: flex; align-items: center; gap: 10px; padding: 11px 14px;
+    border-bottom: 1px solid var(--border); background: var(--panel-2);
+    flex-wrap: wrap;
+  }
+  .obj-name { font-family: var(--mono); font-weight: 650; }
+  .obj-body { padding: 12px 14px; }
+  .tabs { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
+  .tab {
+    padding: 5px 11px; font-size: 12px; border-radius: 7px;
+    background: var(--panel-2); border: 1px solid var(--border); cursor: pointer;
+    color: var(--muted);
+  }
+  .tab.active { color: var(--text); border-color: var(--accent); background: #1e3147; }
+  pre.view {
+    background: #0c1118; border: 1px solid var(--border); border-radius: 9px;
+    padding: 11px; margin: 0; max-height: 340px; overflow: auto;
+    font-family: var(--mono); font-size: 12px; line-height: 1.5;
+    white-space: pre;
+  }
+  .json-key { color: #7fb0ff; }
+  .json-string { color: #9edcaf; }
+  .json-number { color: #f2c37d; }
+  .json-bool { color: #d296f7; }
+  .json-null { color: #7c8aa0; }
+  .hl-added { background: rgba(63,185,107,.22); border-radius: 3px; }
+  .hl-changed { background: rgba(224,169,59,.25); border-radius: 3px; }
+  .hl-only { background: rgba(163,113,247,.22); border-radius: 3px; }
+  .hl-stash { background: rgba(57,197,207,.20); border-radius: 3px; }
+
+  .log {
+    max-height: calc(100vh - 220px); overflow-y: auto;
+    font-family: var(--mono); font-size: 12px; display: flex;
+    flex-direction: column; gap: 3px;
+  }
+  .log-entry { padding: 6px 8px; border-radius: 7px; background: var(--panel-2); border-left: 3px solid var(--border); }
+  .log-entry .t { color: var(--muted); margin-right: 6px; }
+  .log-entry .type { font-weight: 650; }
+  .log-entry.store\\.conflict, .log-entry.client\\.update[data-result=conflict] { border-left-color: var(--red); }
+  .log-entry.migrator\\.object\\.failed { border-left-color: var(--red); }
+  .log-entry.migrator\\.object\\.done, .log-entry.migrator\\.finish { border-left-color: var(--green); }
+  .log-entry.migrator\\.object\\.conflict, .log-entry.migrator\\.object\\.retry { border-left-color: var(--amber); }
+  .log-entry.blast\\.start, .log-entry.blast\\.done { border-left-color: var(--purple); }
+  .log-entry.migrator\\.rollback\\.start { border-left-color: var(--cyan); }
+  .log-entry.migrator\\.finalize\\.blocked { border-left-color: var(--red); }
+  .log-entry .detail { color: var(--muted); display: block; margin-top: 2px; white-space: pre-wrap; }
+  .toast-wrap { position: fixed; right: 18px; bottom: 18px; display: flex; flex-direction: column; gap: 8px; z-index: 50; }
+  .toast {
+    background: #202b39; border: 1px solid var(--border); border-left-width: 3px;
+    border-radius: 9px; padding: 10px 14px; max-width: 420px; font-size: 13px;
+    box-shadow: 0 8px 26px rgba(0,0,0,.45);
+  }
+  .toast.error { border-left-color: var(--red); }
+  .toast.ok { border-left-color: var(--green); }
+  .toast.info { border-left-color: var(--accent); }
+  .legend { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; font-size: 11px; color: var(--muted); }
+  .legend span { display: inline-flex; align-items: center; gap: 4px; }
+  .swatch { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+  .section-gap { margin-top: 16px; }
+  code.inline { font-family: var(--mono); background: var(--panel-2); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+  .progress { height: 6px; background: var(--panel-2); border-radius: 999px; overflow: hidden; margin: 8px 0; }
+  .progress > div { height: 100%; background: linear-gradient(90deg, var(--accent), var(--green)); transition: width .3s; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>CRD 存储版本迁移台</h1>
+    <div class="sub">delivery.pointwise.io/v1alpha1 ⇄ v1 · PointwiseJob · 本地模拟（conversion webhook + convertedObject 注解 + CAS）</div>
+  </div>
+  <span class="badge"><span class="dot" id="phase-dot"></span><span id="phase-text">—</span></span>
+  <span class="badge">storage: <code class="inline" id="storage-ver">—</code></span>
+  <span class="badge">served: <code class="inline" id="served-ver">—</code></span>
+  <span class="badge" id="mig-count">—</span>
+  <div class="spacer"></div>
+  <button id="btn-refresh" class="warn">刷新数据</button>
+  <button id="btn-reset" class="danger">重置环境</button>
+</header>
+
+<div class="layout">
+  <!-- ===================== 左栏：迁移控制 ===================== -->
+  <div>
+    <div class="panel">
+      <h2>① 迁移流程</h2>
+      <div class="progress"><div id="mig-progress" style="width:0%"></div></div>
+      <dl class="kv" id="mig-kv"></dl>
+      <div class="btn-row" style="margin-top:12px">
+        <button id="btn-flip" class="primary">1. 翻转 storage → v1</button>
+        <button id="btn-start">2. 启动迁移器</button>
+        <button id="btn-retry">重试失败对象</button>
+      </div>
+      <div class="btn-row" style="margin-top:8px">
+        <button id="btn-rollback" class="warn">↩ 回滚到旧控制器</button>
+        <button id="btn-finalize" class="danger">3. Finalize（下线旧版本，不可逆）</button>
+      </div>
+      <p class="hint">回滚窗口在 finalize 前始终开放；finalize 有数据安全守卫，存在未迁移或往返丢字段的对象时会被拦截。</p>
+    </div>
+
+    <div class="panel section-gap">
+      <h2>② 故障注入 / 节奏</h2>
+      <div class="field">
+        <label>注入失败的对象名（逗号分隔，留空关闭）</label>
+        <input id="cfg-names" placeholder="edge-delivery-a" />
+      </div>
+      <div class="field">
+        <label>随机失败概率 0–1</label>
+        <input id="cfg-rate" type="number" step="0.1" min="0" max="1" value="0" />
+      </div>
+      <div class="field">
+        <label>每对象处理间隔（秒）</label>
+        <input id="cfg-delay" type="number" step="0.05" min="0" value="0.35" />
+      </div>
+      <div class="field">
+        <label>单对象最大重试次数</label>
+        <input id="cfg-retries" type="number" min="0" max="10" value="3" />
+      </div>
+      <button id="btn-cfg">应用配置</button>
+    </div>
+
+    <div class="panel section-gap">
+      <h2>③ 客户端手动写入</h2>
+      <div class="field">
+        <label>对象</label>
+        <input id="w-name" value="edge-delivery-a" />
+      </div>
+      <div class="btn-row">
+        <button id="btn-old-write">旧客户端(v1alpha1) 改 replicas</button>
+        <button id="btn-new-write">新客户端(v1) 改 timeoutSeconds</button>
+      </div>
+      <p class="hint">旧客户端的结构体不认识 v1 独占字段 —— 观察写入后这些字段是否仍在（服务端合并保护）。</p>
+    </div>
+
+    <div class="panel section-gap">
+      <h2>④ 一键教学演示</h2>
+      <div class="btn-row">
+        <button id="btn-demo" class="primary">▶ 播放完整迁移剧本</button>
+      </div>
+      <p class="hint">重置 → 夹击并发 → 翻转 → 故障迁移 → 修复重试 → 成功 → 回滚 → 再迁移 → finalize。</p>
+    </div>
+  </div>
+
+  <!-- ===================== 中栏：对象三视图 ===================== -->
+  <div class="panel">
+    <h2>对象视图：磁盘存储格式 vs 两个版本客户端</h2>
+    <div class="legend">
+      <span><span class="swatch" style="background:rgba(63,185,107,.4)"></span>新增/写入</span>
+      <span><span class="swatch" style="background:rgba(224,169,59,.5)"></span>本次更新触及</span>
+      <span><span class="swatch" style="background:rgba(163,113,247,.4)"></span>版本独占字段</span>
+      <span><span class="swatch" style="background:rgba(57,197,207,.4)"></span>convertedObject 注解</span>
+    </div>
+    <div id="objects" style="margin-top:12px"></div>
+  </div>
+
+  <!-- ===================== 右栏：事件流 ===================== -->
+  <div class="panel">
+    <h2>实时事件（SSE）</h2>
+    <div class="log" id="log"></div>
+  </div>
+</div>
+
+<div class="toast-wrap" id="toasts"></div>
+<script src="/app.js"></script>
+</body>
+</html>
